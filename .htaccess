@@ -1,0 +1,10 @@
+Options -Indexes
+RewriteEngine On
+
+# Block direct access to backend includes
+RewriteRule ^backend/ - [F,L]
+
+# Remove .php extension (optional)
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_FILENAME}.php -f
+RewriteRule ^(.+)$ $1.php [L,QSA]

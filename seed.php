@@ -69,4 +69,4 @@ try {
     echo "FATAL: " . $e->getMessage() . "\n";
 }
 echo "</pre>";
-// Visit once, then DELETE immediately
+// Visit once, then DELETE immediately. this file is not meant to be a permanent part of the app and contains a hardcoded password.

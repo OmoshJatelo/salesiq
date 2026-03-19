@@ -4,7 +4,7 @@ define('APP_RUNNING', true);
 require_once __DIR__ . '/env.php';
 loadEnv();
 
-if (getenv('APP_DEBUG') === 'true') {
+if (env('APP_DEBUG') === 'true') {
     ini_set('display_errors', 1);
     error_reporting(E_ALL);
 } else {

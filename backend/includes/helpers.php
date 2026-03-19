@@ -3,7 +3,7 @@ if (!defined('APP_RUNNING')) exit;
 
 // Base path of the project (e.g. '/Salesiq' or '' for web root).
 // Set APP_BASE in your .env — no trailing slash.
-define('BASE', rtrim(getenv('APP_BASE') ?: '', '/'));
+define('BASE', rtrim(env('APP_BASE') ?: '', '/'));
 
 /**
  * Build a URL relative to the project base.

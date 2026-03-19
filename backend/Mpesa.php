@@ -16,12 +16,12 @@ class Mpesa {
     private string $baseUrl;
 
     public function __construct() {
-        $this->consumerKey    = getenv('MPESA_CONSUMER_KEY')    ?: '';
-        $this->consumerSecret = getenv('MPESA_CONSUMER_SECRET') ?: '';
-        $this->shortcode      = getenv('MPESA_SHORTCODE')       ?: '174379';
-        $this->passkey        = getenv('MPESA_PASSKEY')         ?: '';
-        $this->callbackUrl    = getenv('MPESA_CALLBACK_URL')    ?: '';
-        $this->sandbox        = (getenv('MPESA_ENV') ?: 'sandbox') === 'sandbox';
+        $this->consumerKey    = env('MPESA_CONSUMER_KEY')    ?: '';
+        $this->consumerSecret = env('MPESA_CONSUMER_SECRET') ?: '';
+        $this->shortcode      = env('MPESA_SHORTCODE')       ?: '174379';
+        $this->passkey        = env('MPESA_PASSKEY')         ?: '';
+        $this->callbackUrl    = env('MPESA_CALLBACK_URL')    ?: '';
+        $this->sandbox        = (env('MPESA_ENV') ?: 'sandbox') === 'sandbox';
         $this->baseUrl        = $this->sandbox
             ? 'https://sandbox.safaricom.co.ke'
             : 'https://api.safaricom.co.ke';

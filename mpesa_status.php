@@ -1,20 +1,15 @@
 <?php
 /**
  * mpesa_status.php
- * ─────────────────
- * JSON endpoint polled by the checkout page to check payment status.
- * Called every 3 seconds by the browser while customer is on the
- * "waiting for payment" screen.
- *
- * GET /mpesa_status.php?order_id=42
- * Returns: { "status": "pending|paid|failed|cancelled", "message": "..." }
+ * Polls payment status — first checks DB, then queries Safaricom directly.
+ * This works even when the callback URL is blocked (e.g. InfinityFree).
  */
 define('APP_RUNNING', true);
 require_once __DIR__ . '/backend/includes/bootstrap.php';
+require_once __DIR__ . '/backend/Mpesa.php';
 
 header('Content-Type: application/json');
 
-// Must be logged in
 if (!isLoggedIn()) {
     echo json_encode(['status' => 'error', 'message' => 'Not authenticated']);
     exit;
@@ -28,9 +23,10 @@ if (!$orderId) {
 
 $pdo = getDB();
 
-// Verify this order belongs to the current user
+// Verify order belongs to current user
 $stmt = $pdo->prepare(
-    'SELECT o.status, o.mpesa_code, t.status AS txn_status, t.result_desc, t.result_code
+    'SELECT o.*, t.status AS txn_status, t.checkout_request_id,
+            t.result_code, t.result_desc
      FROM orders o
      LEFT JOIN mpesa_transactions t ON t.order_id = o.id
      WHERE o.id = ? AND o.customer_id = ?
@@ -44,27 +40,83 @@ if (!$row) {
     exit;
 }
 
-// Map to a simple status the frontend understands
+// Already paid in DB — great
 if ($row['status'] === 'paid') {
     echo json_encode([
-        'status'      => 'paid',
-        'message'     => 'Payment received!',
-        'mpesa_code'  => $row['mpesa_code'],
-        'redirect'    => url('order_confirmation.php?id=' . $orderId),
+        'status'    => 'paid',
+        'message'   => 'Payment confirmed!',
+        'redirect'  => url('order_confirmation.php?id=' . $orderId),
     ]);
-} elseif ($row['txn_status'] === 'failed') {
-    $desc = $row['result_desc'] ?? 'Payment failed.';
-    // Friendly messages for common result codes
+    exit;
+}
+
+// Already marked failed in DB
+if ($row['txn_status'] === 'failed') {
     $friendly = match ((string)($row['result_code'] ?? '')) {
-        '1032' => 'You cancelled the payment on your phone.',
+        '1032' => 'You cancelled the payment.',
         '1037' => 'Request timed out. Please try again.',
         '1'    => 'Insufficient M-Pesa balance.',
-        default => $desc,
+        default => $row['result_desc'] ?: 'Payment failed.',
     };
     echo json_encode(['status' => 'failed', 'message' => $friendly]);
-} elseif ($row['txn_status'] === 'cancelled') {
-    echo json_encode(['status' => 'failed', 'message' => 'Payment was cancelled.']);
-} else {
-    // Still pending
-    echo json_encode(['status' => 'pending', 'message' => 'Waiting for payment…']);
+    exit;
 }
+
+// Still pending — query Safaricom directly to check real status
+$checkoutId = $row['checkout_request_id'] ?? null;
+
+if ($checkoutId) {
+    try {
+        $mpesa  = new Mpesa();
+        $result = $mpesa->queryStatus($checkoutId);
+
+        $resultCode = (int)($result['ResultCode'] ?? -1);
+        $resultDesc = $result['ResultDesc'] ?? '';
+
+        if ($resultCode === 0) {
+            // Payment confirmed by Safaricom — update DB
+            $pdo->prepare(
+                'UPDATE mpesa_transactions
+                 SET status="completed", result_code=?, result_desc=?, updated_at=NOW()
+                 WHERE checkout_request_id=?'
+            )->execute([$resultCode, $resultDesc, $checkoutId]);
+
+            $pdo->prepare(
+                'UPDATE orders SET status="paid" WHERE id=? AND status="pending"'
+            )->execute([$orderId]);
+
+            echo json_encode([
+                'status'   => 'paid',
+                'message'  => 'Payment confirmed!',
+                'redirect' => url('order_confirmation.php?id=' . $orderId),
+            ]);
+            exit;
+
+        } elseif (in_array($resultCode, [1032, 1037, 1, 2001], true)) {
+            // Definitive failure codes
+            $friendly = match ($resultCode) {
+                1032 => 'You cancelled the payment.',
+                1037 => 'Request timed out. Please try again.',
+                1    => 'Insufficient M-Pesa balance.',
+                2001 => 'Wrong PIN entered.',
+                default => $resultDesc ?: 'Payment failed.',
+            };
+
+            $pdo->prepare(
+                'UPDATE mpesa_transactions
+                 SET status="failed", result_code=?, result_desc=?, updated_at=NOW()
+                 WHERE checkout_request_id=?'
+            )->execute([$resultCode, $resultDesc, $checkoutId]);
+
+            echo json_encode(['status' => 'failed', 'message' => $friendly]);
+            exit;
+        }
+        // Any other code = still processing, fall through to pending response
+
+    } catch (Exception $e) {
+        // Query failed — fall through, keep polling
+    }
+}
+
+// Still genuinely pending
+echo json_encode(['status' => 'pending', 'message' => 'Waiting for payment…']);

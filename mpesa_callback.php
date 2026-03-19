@@ -1,15 +1,8 @@
 <?php
 /**
  * mpesa_callback.php
- * ──────────────────
- * Safaricom POSTs the payment result to this URL after the customer
- * enters their PIN. This runs in the background — no browser session.
- *
- * URL: https://yourdomain.co.ke/salesiq/mpesa_callback.php
- * Set this as MPESA_CALLBACK_URL in .env
- *
- * IMPORTANT: This file must be publicly reachable by Safaricom's servers.
- * It will NOT work on localhost — use ngrok for local testing.
+ * Safaricom POSTs the payment result here after customer enters PIN.
+ * Must always return HTTP 200 with JSON — even on errors.
  */
 
 define('APP_RUNNING', true);
@@ -17,103 +10,108 @@ require_once __DIR__ . '/backend/includes/env.php';
 loadEnv();
 require_once __DIR__ . '/backend/includes/db.php';
 
-// Always respond 200 to Safaricom immediately (they retry on non-200)
+// Always respond 200 immediately
 header('Content-Type: application/json');
-$response = ['ResultCode' => 0, 'ResultDesc' => 'Accepted'];
 
-// ── Read the raw callback body ─────────────────────────────────────────────
-$raw  = file_get_contents('php://input');
-$data = json_decode($raw, true);
-
-// Log raw payload for debugging (disable in production)
-if (getenv('APP_DEBUG') === 'true') {
-    $logDir = __DIR__ . '/backend/logs';
-    if (!is_dir($logDir)) mkdir($logDir, 0755, true);
-    file_put_contents(
-        $logDir . '/mpesa_callback.log',
-        date('Y-m-d H:i:s') . "\n" . $raw . "\n\n",
+// ── Log everything to a file for debugging ────────────────────────────────
+function cbLog(string $msg): void {
+    $dir = __DIR__ . '/backend/logs';
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    @file_put_contents(
+        $dir . '/callback.log',
+        date('Y-m-d H:i:s') . ' | ' . $msg . "\n",
         FILE_APPEND
     );
 }
 
-// ── Parse the STK callback structure ──────────────────────────────────────
+$raw = file_get_contents('php://input');
+cbLog("Received: $raw");
+
 try {
-    $body       = $data['Body']['stkCallback']   ?? null;
-    $merchantId = $body['MerchantRequestID']      ?? null;
-    $checkoutId = $body['CheckoutRequestID']      ?? null;
-    $resultCode = $body['ResultCode']             ?? null;
-    $resultDesc = $body['ResultDesc']             ?? '';
+    $data = json_decode($raw, true);
+
+    if (!$data) {
+        cbLog("ERROR: Empty or invalid JSON body");
+        echo json_encode(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
+        exit;
+    }
+
+    $body       = $data['Body']['stkCallback'] ?? null;
+    $checkoutId = $body['CheckoutRequestID']   ?? null;
+    $resultCode = (int)($body['ResultCode']    ?? -1);
+    $resultDesc = $body['ResultDesc']          ?? '';
+
+    cbLog("CheckoutID: $checkoutId | ResultCode: $resultCode | Desc: $resultDesc");
 
     if (!$checkoutId) {
-        echo json_encode($response); exit;
+        cbLog("ERROR: No CheckoutRequestID in callback");
+        echo json_encode(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
+        exit;
     }
 
     $pdo = getDB();
+    cbLog("DB connected OK");
 
-    // ── Find the pending transaction ───────────────────────────────────────
+    // Find transaction
     $stmt = $pdo->prepare(
         'SELECT * FROM mpesa_transactions WHERE checkout_request_id = ?'
     );
     $stmt->execute([$checkoutId]);
-    $transaction = $stmt->fetch();
+    $txn = $stmt->fetch();
 
-    if (!$transaction) {
-        // Unknown transaction — log and ignore
-        echo json_encode($response); exit;
+    if (!$txn) {
+        cbLog("ERROR: No transaction found for CheckoutID: $checkoutId");
+        echo json_encode(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
+        exit;
     }
 
-    if ((int)$resultCode === 0) {
-        // ── PAYMENT SUCCESSFUL ─────────────────────────────────────────────
-        // Extract M-Pesa receipt from callback metadata
+    cbLog("Found transaction ID: {$txn['id']} for order ID: {$txn['order_id']}");
+
+    if ($resultCode === 0) {
+        // Payment successful — extract receipt
         $items   = $body['CallbackMetadata']['Item'] ?? [];
         $receipt = '';
-        $amount  = 0;
-        $phone   = '';
 
         foreach ($items as $item) {
-            match ($item['Name'] ?? '') {
-                'MpesaReceiptNumber' => $receipt = $item['Value'],
-                'Amount'             => $amount  = $item['Value'],
-                'PhoneNumber'        => $phone   = $item['Value'],
-                default              => null,
-            };
+            if (($item['Name'] ?? '') === 'MpesaReceiptNumber') {
+                $receipt = $item['Value'];
+            }
         }
+
+        cbLog("Payment SUCCESS. Receipt: $receipt");
 
         $pdo->beginTransaction();
 
-        // Update transaction record
         $pdo->prepare(
             'UPDATE mpesa_transactions
-             SET status=?, result_code=?, result_desc=?, mpesa_receipt=?, updated_at=NOW()
+             SET status="completed", result_code=?, result_desc=?,
+                 mpesa_receipt=?, updated_at=NOW()
              WHERE checkout_request_id=?'
-        )->execute(['completed', $resultCode, $resultDesc, $receipt, $checkoutId]);
+        )->execute([$resultCode, $resultDesc, $receipt, $checkoutId]);
 
-        // Update order status to paid + store receipt code
-        $pdo->prepare(
-            'UPDATE orders
-             SET status=?, mpesa_code=?
-             WHERE id=? AND status=?'
-        )->execute(['paid', $receipt, $transaction['order_id'], 'pending']);
+        $rows = $pdo->prepare(
+            'UPDATE orders SET status="paid", mpesa_code=?
+             WHERE id=? AND status="pending"'
+        );
+        $rows->execute([$receipt, $txn['order_id']]);
+        $affected = $rows->rowCount();
 
         $pdo->commit();
+        cbLog("Updated order {$txn['order_id']}. Rows affected: $affected");
 
     } else {
-        // ── PAYMENT FAILED / CANCELLED ─────────────────────────────────────
-        // ResultCode 1032 = user cancelled, 1037 = timeout, etc.
+        // Payment failed
+        cbLog("Payment FAILED. Code: $resultCode Desc: $resultDesc");
+
         $pdo->prepare(
             'UPDATE mpesa_transactions
-             SET status=?, result_code=?, result_desc=?, updated_at=NOW()
+             SET status="failed", result_code=?, result_desc=?, updated_at=NOW()
              WHERE checkout_request_id=?'
-        )->execute(['failed', $resultCode, $resultDesc, $checkoutId]);
-
-        // Keep order as 'pending' so customer can retry
+        )->execute([$resultCode, $resultDesc, $checkoutId]);
     }
 
-} catch (Exception $e) {
-    // Silently catch — we must always return 200
-    if (getenv('APP_DEBUG') === 'true') {
-        error_log('M-Pesa callback error: ' . $e->getMessage());
-    }
+} catch (Throwable $e) {
+    cbLog("EXCEPTION: " . $e->getMessage() . " in " . $e->getFile() . ":" . $e->getLine());
 }
 
-echo json_encode($response);
+echo json_encode(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);

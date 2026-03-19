@@ -1,10 +1,12 @@
 Options -Indexes
-RewriteEngine On
 
 # Block direct access to backend includes
-RewriteRule ^backend/ - [F,L]
+<FilesMatch "^(env|db|bootstrap|auth|audit|helpers)\.php$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
 
-# Remove .php extension (optional)
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteCond %{REQUEST_FILENAME}.php -f
-RewriteRule ^(.+)$ $1.php [L,QSA]
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^backend/ - [F,L]
+</IfModule>

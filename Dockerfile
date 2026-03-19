@@ -1,7 +1,11 @@
 FROM php:8.2-apache
 
-# Enable Apache modules
+# Enable Apache rewrite module
 RUN a2enmod rewrite
+
+# Disable conflicting MPM modules and enable prefork only
+RUN a2dismod mpm_event mpm_worker 2>/dev/null || true \
+    && a2enmod mpm_prefork
 
 # Install PHP extensions
 RUN apt-get update && apt-get install -y \
@@ -10,20 +14,16 @@ RUN apt-get update && apt-get install -y \
     && docker-php-ext-install pdo pdo_mysql curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set document root
-ENV APACHE_DOCUMENT_ROOT /var/www/html
-
 # Copy project files
 COPY . /var/www/html/
 
-# Set permissions
+# Set permissions and create logs directory
 RUN chown -R www-data:www-data /var/www/html \
     && chmod -R 755 /var/www/html \
     && mkdir -p /var/www/html/backend/logs \
     && chmod -R 777 /var/www/html/backend/logs
 
-# Apache config — allow .htaccess overrides
-RUN sed -i 's|DocumentRoot /var/www/html|DocumentRoot /var/www/html|g' /etc/apache2/sites-available/000-default.conf
+# Allow .htaccess overrides
 RUN echo '<Directory /var/www/html>\n\
     Options Indexes FollowSymLinks\n\
     AllowOverride All\n\

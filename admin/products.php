@@ -9,6 +9,59 @@ $error  = null;
 
 $cats = $pdo->query('SELECT * FROM categories ORDER BY name')->fetchAll();
 
+function handleImageUpload(array $file, ?string $currentImage): array {
+    // Returns ['url' => string|null, 'error' => string|null]
+    $uploadDir = __DIR__ . '/../uploads/products/';
+    if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
+
+    // No file uploaded
+    if (empty($file['name']) || $file['error'] === UPLOAD_ERR_NO_FILE) {
+        return ['url' => null, 'error' => null];
+    }
+
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        return ['url' => null, 'error' => 'Upload failed. Please try again.'];
+    }
+
+    // Validate size (2MB max)
+    if ($file['size'] > 2 * 1024 * 1024) {
+        return ['url' => null, 'error' => 'Image must be under 2MB.'];
+    }
+
+    // Validate type
+    $allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    $finfo   = finfo_open(FILEINFO_MIME_TYPE);
+    $mime    = finfo_file($finfo, $file['tmp_name']);
+    finfo_close($finfo);
+
+    if (!in_array($mime, $allowed)) {
+        return ['url' => null, 'error' => 'Only JPG, PNG, WebP and GIF images are allowed.'];
+    }
+
+    // Generate unique filename
+    $ext      = match($mime) {
+        'image/jpeg' => 'jpg',
+        'image/png'  => 'png',
+        'image/webp' => 'webp',
+        'image/gif'  => 'gif',
+        default      => 'jpg',
+    };
+    $filename = uniqid('product_', true) . '.' . $ext;
+    $dest     = $uploadDir . $filename;
+
+    if (!move_uploaded_file($file['tmp_name'], $dest)) {
+        return ['url' => null, 'error' => 'Failed to save image. Check folder permissions.'];
+    }
+
+    // Delete old uploaded image if replacing
+    if ($currentImage && str_contains($currentImage, 'uploads/products/')) {
+        $oldPath = __DIR__ . '/../' . ltrim($currentImage, '/');
+        if (file_exists($oldPath)) @unlink($oldPath);
+    }
+
+    return ['url' => 'uploads/products/' . $filename, 'error' => null];
+}
+
 function validateProduct(array $p): ?string {
     if (strlen(trim($p['name'] ?? '')) < 2) return 'Product name is required.';
     if (!is_numeric($p['cost_price'] ?? '') || (float)$p['cost_price'] < 0)   return 'Enter a valid cost price.';
@@ -26,6 +79,15 @@ if ($action === 'create') {
         else { $error = validateProduct($_POST); }
 
         if (!$error) {
+            // Handle image upload
+            $imgResult  = handleImageUpload($_FILES['image_file'] ?? [], null);
+            if ($imgResult['error']) { $error = $imgResult['error']; }
+        }
+        if (!$error) {
+            // Determine final image URL: uploaded file > URL field
+            $imageUrl = $imgResult['url']
+                ?? (trim($_POST['image_url']??'')?:null);
+
             $pdo->prepare(
                 'INSERT INTO products (name,description,cost_price,selling_price,stock,reorder_level,
                                        image_url,is_active,category_id,created_by)
@@ -37,7 +99,7 @@ if ($action === 'create') {
                 number_format((float)$_POST['selling_price'],2,'.',''),
                 (int)$_POST['stock'],
                 max(0,(int)($_POST['reorder_level']??10)),
-                trim($_POST['image_url']??'')?:null,
+                $imageUrl,
                 isset($_POST['is_active'])?1:0,
                 (int)$_POST['category_id'],
                 $_SESSION['user_id'],
@@ -69,6 +131,25 @@ if ($action === 'edit') {
         else { $error = validateProduct($_POST); }
 
         if (!$error) {
+            // Handle image upload
+            $imgResult = handleImageUpload($_FILES['image_file'] ?? [], $product['image_url'] ?? null);
+            if ($imgResult['error']) { $error = $imgResult['error']; }
+        }
+        if (!$error) {
+            // Remove image if checkbox ticked
+            if (!empty($_POST['remove_image'])) {
+                $old = $product['image_url'] ?? '';
+                if ($old && str_contains($old, 'uploads/products/')) {
+                    $oldPath = __DIR__ . '/../' . ltrim($old, '/');
+                    if (file_exists($oldPath)) @unlink($oldPath);
+                }
+                $imageUrl = null;
+            } else {
+                $imageUrl = $imgResult['url']
+                    ?? (trim($_POST['image_url']??'')?:null)
+                    ?? ($product['image_url'] ?? null);
+            }
+
             $pdo->prepare(
                 'UPDATE products SET name=?,description=?,cost_price=?,selling_price=?,stock=?,
                                      reorder_level=?,image_url=?,is_active=?,category_id=?
@@ -80,7 +161,7 @@ if ($action === 'edit') {
                 number_format((float)$_POST['selling_price'],2,'.',''),
                 (int)$_POST['stock'],
                 max(0,(int)($_POST['reorder_level']??10)),
-                trim($_POST['image_url']??'')?:null,
+                $imageUrl,
                 isset($_POST['is_active'])?1:0,
                 (int)$_POST['category_id'],
                 $id,

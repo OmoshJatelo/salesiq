@@ -3,3 +3,11 @@
 /vendor/
 backend/logs/
 .env.example
+
+# Uploaded product images (don't commit user uploads)
+uploads/products/*.jpg
+uploads/products/*.jpeg
+uploads/products/*.png
+uploads/products/*.webp
+uploads/products/*.gif
+backend/logs/

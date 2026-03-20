@@ -98,8 +98,14 @@ include __DIR__ . '/backend/includes/shop_header.php';
     </div>
 
     <div class="d-flex gap-2 flex-wrap">
-      <a href="<?= url('my_orders.php') ?>" class="btn-primary-shop" style="border-radius:var(--radius-sm);">
-        <i class="bi bi-receipt"></i> View My Orders
+      <a href="<?= url('receipt.php?id='.$id) ?>" class="btn-primary-shop" style="border-radius:var(--radius-sm);">
+        <i class="bi bi-download"></i> Download Receipt
+      </a>
+      <a href="<?= url('my_orders.php') ?>"
+         style="border:1.5px solid var(--border);border-radius:var(--radius-sm);
+                padding:.5rem 1rem;color:var(--text);font-size:.875rem;
+                display:inline-flex;align-items:center;gap:.3rem;text-decoration:none;">
+        <i class="bi bi-receipt"></i> My Orders
       </a>
       <a href="<?= url('shop.php') ?>"
          style="border:1.5px solid var(--border);border-radius:var(--radius-sm);

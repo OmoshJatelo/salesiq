@@ -50,9 +50,15 @@ if ($viewId > 0) {
         </h2>
         <small class="text-adm-muted"><?= date('d M Y, H:i', strtotime($order['created_at'])) ?></small>
       </div>
-      <a href="<?= url('admin/orders.php') ?>" class="btn btn-sm btn-outline-secondary">
-        <i class="bi bi-arrow-left me-1"></i>All Orders
-      </a>
+      <div class="d-flex gap-2">
+        <a href="<?= url('receipt.php?id='.$viewId) ?>" target="_blank"
+           class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-download me-1"></i>Receipt
+        </a>
+        <a href="<?= url('admin/orders.php') ?>" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-arrow-left me-1"></i>All Orders
+        </a>
+      </div>
     </div>
 
     <div class="row g-4">

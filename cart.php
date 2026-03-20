@@ -10,12 +10,6 @@ if (!isset($_SESSION['cart'])) $_SESSION['cart'] = [];
 if ($action === 'add' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!verifyCsrf()) { flashSet('danger','Invalid request.'); header('Location: ' . url('shop.php')); exit; }
 
-    if (!isLoggedIn()) {
-        $_SESSION['redirect_after_login'] = $_SERVER['HTTP_REFERER'] ?? url('shop.php');
-        flashSet('warning','Please sign in to add items to your cart.');
-        header('Location: ' . url('login.php')); exit;
-    }
-
     if (isStaff()) { header('Location: ' . url('admin/dashboard.php')); exit; }
 
     $pid      = (int)($_POST['product_id'] ?? 0);
@@ -180,7 +174,7 @@ include __DIR__ . '/backend/includes/shop_header.php';
       </div>
       <?php if ($delivery > 0): ?>
       <p class="small mb-3 mt-1" style="color:var(--muted);">
-        Add KES <?= number_format(5000 - $subtotal, 2) ?> more for free delivery.
+        Add KES <?= number_format(100 - $subtotal, 2) ?> more for free delivery.
       </p>
       <?php else: ?>
       <p class="small mb-3 mt-1" style="color:var(--green);">
